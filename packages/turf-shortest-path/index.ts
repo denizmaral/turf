@@ -8,6 +8,7 @@ import {
 } from "geojson";
 import { bbox } from "@turf/bbox";
 import { booleanPointInPolygon } from "@turf/boolean-point-in-polygon";
+import { pointToPolygonDistance } from "@turf/point-to-polygon-distance";
 import { distance } from "@turf/distance";
 import { transformScale as scale } from "@turf/transform-scale";
 import { cleanCoords } from "@turf/clean-coords";
@@ -36,6 +37,7 @@ import { Graph, GridNode, astar } from "./lib/javascript-astar.js";
  * @param {Polygon|Feature<Polygon>|FeatureCollection<Polygon>} [options.obstacles] areas which path cannot travel
  * @param {Units} [options.units='kilometers'] unit in which resolution & minimum distance will be expressed in; Supports all valid Turf {@link https://turfjs.org/docs/api/types/Units Units}.
  * @param {number} [options.resolution=100] distance between matrix points on which the path will be calculated
+ * @param {number} [options.safetyDistance=0] minimum distance the path should keep from obstacles (same units as resolution)
  * @returns {Feature<LineString>} shortest path between start and end
  * @example
  * var start = [-5, -6];
@@ -56,6 +58,7 @@ function shortestPath(
     obstacles?: Polygon | Feature<Polygon> | FeatureCollection<Polygon>;
     units?: Units;
     resolution?: number;
+    safetyDistance?: number;
   } = {}
 ): Feature<LineString> {
   // Optional parameters
@@ -63,6 +66,7 @@ function shortestPath(
   if (!isObject(options)) throw new Error("options is invalid");
   let obstacles = options.obstacles || featureCollection([]);
   let resolution = options.resolution || 100;
+  const safetyDistance = options.safetyDistance || 0;
 
   // validation
   if (!start) throw new Error("start is required");
@@ -133,7 +137,7 @@ function shortestPath(
     let c = 0;
     while (currentX <= east) {
       const pt = point([currentX, currentY]);
-      const isInsideObstacle = isInside(pt, obstacles);
+      const isInsideObstacle = isInside(pt, obstacles, safetyDistance, options.units);
       // feed obstacles matrix
       matrixRow.push(isInsideObstacle ? 0 : 1); // with javascript-astar
       // matrixRow.push(isInsideObstacle ? 1 : 0); // with astar-andrea
@@ -191,17 +195,32 @@ function shortestPath(
 }
 
 /**
- * Checks if Point is inside any of the Polygons
+ * Checks if Point is inside or within safetyDistance of any Polygon
  *
  * @private
  * @param {Feature<Point>} pt to check
  * @param {FeatureCollection<Polygon>} polygons features
- * @returns {boolean} if inside or not
+ * @param {number} safetyDistance minimum distance to keep from polygons
+ * @param {Units} units unit for safetyDistance
+ * @returns {boolean} if inside or too close
  */
-function isInside(pt: Feature<Point>, polygons: FeatureCollection<Polygon>) {
+function isInside(
+  pt: Feature<Point>,
+  polygons: FeatureCollection<Polygon>,
+  safetyDistance: number = 0,
+  units?: Units
+) {
   for (let i = 0; i < polygons.features.length; i++) {
     if (booleanPointInPolygon(pt, polygons.features[i])) {
       return true;
+    }
+    if (safetyDistance > 0) {
+      const d = pointToPolygonDistance(pt, polygons.features[i], {
+        units: units || "kilometers",
+      });
+      if (d >= 0 && d < safetyDistance) {
+        return true;
+      }
     }
   }
   return false;
